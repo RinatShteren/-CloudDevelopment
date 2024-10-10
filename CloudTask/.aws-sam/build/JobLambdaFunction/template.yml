@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS SAM template to create a Lambda function and EventBridge event bus.
+
+Parameters:
+  NumOfConcurrentJobs:
+    Type: Number
+    Description: The number of concurrent executions for the Lambda function.
+    Default: 5
+
+Resources:
+  MyLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: FirstLambda.lambda_handler
+      Runtime: python3.12
+      MemorySize: 256
+      Timeout: 30
+      Events:
+        ApiGateway:
+          Type: Api
+          Properties:
+            Path: /hello
+            Method: get
+  MyEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: MyEventBus
+
+  JobLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: send_event.lambda_handler
+      Runtime: python3.12
+      CodeUri: .
+      Environment:
+        Variables:
+          EVENT_BUS_NAME: !Ref MyEventBus
