@@ -1,1 +1,1 @@
-{"statusCode": 200, "body": "{\"message\": \"Request count updated! and second Lambda invoked!\", \"data\": {\"user_id\": \"c137d9f5-3f40-49ab-b966-f994deb939c0\", \"request_count\": 5.0}}"}
+{"statusCode": 400, "body": "{\"error\": \"user_id is required\", \"user_id\": null}"}
