@@ -6,7 +6,64 @@ Parameters:
     Type: Number
     Description: The number of concurrent executions for the Lambda function.
     Default: 5
+  DynamoDBTableName:
+    Type: String
+    Description: The name of the DynamoDB table to store user requests.
+    Default: UserRequests2
+  CreateDynamoDBTable:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Description: Do you want to create a new DynamoDB table or use an existing one?
+Conditions:
+  CreateDynamoDBCondition:
+    Fn::Equals:
+    - Ref: CreateDynamoDBTable
+    - 'true'
 Resources:
+  UserRequestsTable:
+    Condition: CreateDynamoDBCondition
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Ref: DynamoDBTableName
+      AttributeDefinitions:
+      - AttributeName: user_id
+        AttributeType: S
+      - AttributeName: current_time
+        AttributeType: S
+      KeySchema:
+      - AttributeName: user_id
+        KeyType: HASH
+      - AttributeName: current_time
+        KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: DynamoDBAccessPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:Query
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:UpdateItem
+            Resource: arn:aws:dynamodb:us-east-1:528757791380:table/UserRequests2
   MyLambdaFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -14,6 +71,12 @@ Resources:
       Runtime: python3.12
       MemorySize: 256
       Timeout: 30
+      Environment:
+        Variables:
+          NUM_OF_CONCURRENT_JOBS:
+            Ref: NumOfConcurrentJobs
+          TABLE_NAME:
+            Ref: DynamoDBTableName
       Events:
         ApiGateway:
           Type: Api

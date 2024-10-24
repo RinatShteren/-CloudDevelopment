@@ -1,122 +1,95 @@
 import json
 import boto3
-import os  #use for NumOfConcurrentJobs
+import os  # use for NumOfConcurrentJobs
+from datetime import datetime, timedelta
 
 dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table('UserRequests')
+table = dynamodb.Table('UserRequests2')
 lambda_client = boto3.client('lambda')
 
-NumOfConcurrentJobs =5 #int(os.environ.get('NUM_OF_CONCURRENT_JOBS', 5))
+NumOfConcurrentJobs = int(os.environ.get('NUM_OF_CONCURRENT_JOBS', 5))
 
 def lambda_handler(event, context):
-
     try:
-        """  # בדיקה אם יש מפתח 'body' באירוע
-        if 'body' not in event:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({'error': 'Missing body in event'})
-            }
-
-        body = json.loads(event['body'])  # קבלת ה-body מהבקשה
-        print("Parsed body: " + json.dumps(body))  # הדפסת ה-body לאחר פענוח
-        user_id = body.get('user_id')  # קבלת user_id מה-body
-        delay = body.get('delay', 2)  # קבלת delay מה-body, אם לא נשלח יקבל ערך ברירת מחדל
-        """
-        #user_id = event.get('user_id')  # קבלת user_id מהבקשה
-        #delay = event.get('delay', 2)  # קבלת delay מהבקשה, אם לא נשלח יקבל ערך ברירת מחדל
-        #user_id = event.get('user_id')  # קבלת user_id מהבקשה
-        #delay = event.get('delay', 42)  # קבלת delay מהבקשה, אם לא נשלח יקבל ערך ברירת מחדל
-        user_id = event['queryStringParameters'].get('user_id')
-        delay = event['queryStringParameters'].get('delay', 42)
+        user_id = event.get('user_id')
+        delay = event.get('delay', 2)
 
         if not user_id:
             return {
                 'statusCode': 400,
                 'body': json.dumps({
-                    'error': 'user_id is required',
-                    'user_id': event.get('user_id', user_id)  # הוספת user_id שנשלח בבקשה
-                })
-                #'body': json.dumps({'error': 'user_id is required'})
+                    'error': 'user_id is required'})
             }
-        # ניסיון לקבל את הפריט הקיים
-        response = table.get_item(Key={'user_id': user_id})
 
-        if 'Item' in response:
-            # אם הפריט קיים, עדכן את ה-request_count
-            current_count = response['Item']['request_count']
+        current_time = datetime.utcnow().isoformat() + 'Z'
+        current_time_obj = datetime.fromisoformat(current_time[:-1])
 
-            if current_count >= NumOfConcurrentJobs:
-                # אם ה-request_count גבוה מהגבלה, החזר שגיאה
-                return {
-                    'statusCode': 429,
-                    'body': json.dumps({
-                        'message': 'Too many requests. You have reached the limit of concurrent requests.'
-                    })
-                }
+        # Search for the last 5 requests of the user
+        response = table.query(
+            KeyConditionExpression='user_id = :uid',
+            ExpressionAttributeValues={
+                ':uid': user_id
+            },
+            Limit=5,
+            ScanIndexForward=False  # to get the requests from newest to oldest
+        )
 
+        # Count the current requests, with a maximum of 5
+        current_count = len(response['Items'])
 
-            table.update_item(
-                Key={'user_id': user_id},
-                UpdateExpression="SET request_count = :val",
-                ExpressionAttributeValues={
-                    ':val': current_count + 1
+        if current_count == NumOfConcurrentJobs:
+            # If the current request count is equal to the limit
+            # Check if there is a request whose delay has passed
+            for item in response['Items']:
+                delay_time = timedelta(seconds=float(item['delay']))
+                end_time = datetime.fromisoformat(item['current_time'][:-1]) + delay_time
+                if current_time_obj >= end_time:
+                    # If the delay has passed, we can add a new request
+                    current_count -= 1  # Decrease the count for the old request
+
+        # If the current request count is below the limit
+        if current_count < NumOfConcurrentJobs:
+            # Add a new request
+            table.put_item(
+                Item={
+                    'user_id': user_id,
+                    'current_time': current_time,
+                    'delay': delay,
+                    'request_count': current_count + 1  # Update the request count
                 }
             )
-            # שליחת קריאה לפונקציה השנייה אחרי עדכון
+
+            # Send a call to the second function after the update
             payload = {
                 'body': json.dumps({
                     'request_id': 'some-request-id',
                     'user_id': user_id,
-                    'delay': delay  # אפשר לשנות את ה-delay לפי הצורך
+                    'delay': delay  # Can change the delay as needed
                 })
-
             }
             lambda_client.invoke(
-                FunctionName='CloudTask-send_event',  # שם הפונקציה השנייה
-                InvocationType='Event',  # קריאה אסינכרונית
+                FunctionName='CloudTask-send_event',
+                InvocationType='Event',
                 Payload=json.dumps(payload)
             )
+
             return {
                 'statusCode': 200,
                 'body': json.dumps({
-                    'message': 'Request count updated! and second Lambda invoked!',
+                    'message': 'New request added and second Lambda invoked!',
                     'data': {
                         'user_id': user_id,
-                        'request_count': float(current_count + 1)  # המרה ל-float
+                        'delay': delay,
+                        'current_time': current_time,
+                        'request_count': current_count + 1  # Update the count
                     }
                 })
             }
         else:
-            # אם הפריט לא קיים, צור פריט חדש
-            table.put_item(
-                Item={
-                    'user_id': user_id,
-                    'delay': delay,
-                    'request_count': 1
-                }
-            )
-            # שליחת קריאה לפונקציה השנייה
-            payload = {
-                'body': json.dumps({
-                    'request_id': 'some-request-id',
-                    'user_id': user_id,
-                    'delay': delay  # אפשר לשנות את ה-delay לפי הצורך
-                })
-            }
-            lambda_client.invoke(
-                FunctionName='CloudTask-send_event',  # שם הפונקציה השנייה
-                InvocationType='Event',  # קריאה אסינכרונית
-                Payload=json.dumps(payload)
-            )
             return {
-                'statusCode': 200,
+                'statusCode': 429,
                 'body': json.dumps({
-                    'message': 'New item created and second Lambda invoked!',
-                    'data': {
-                        'user_id': user_id,
-                        'request_count': 1
-                    }
+                    'message': 'Too many requests. You have reached the limit of concurrent requests.'
                 })
             }
 
